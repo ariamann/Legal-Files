@@ -27,6 +27,7 @@ export interface FileSystemItem {
   size?: string;
   position: Position;
   createdAt: number;
+  color?: string; // For Notes (e.g., 'yellow', 'pink', 'blue')
   
   // AI Specifics
   analysisStatus: AnalysisStatus;

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronLeft, Settings, Folder, StickyNote, UploadCloud, Moon, Sun, Languages, MessageSquare, X } from 'lucide-react';
 import { FileSystemItem, ItemType, AnalysisStatus, Position, CaseData } from '../types';
-import { getIconForFileType, MOCK_INITIAL_SCENARIO, TRANSLATIONS, SUPPORTED_EXTENSIONS } from '../constants';
+import { getIconForFileType, MOCK_INITIAL_SCENARIO, TRANSLATIONS, SUPPORTED_EXTENSIONS, NOTE_COLORS, getRandomNoteColor } from '../constants';
 import ContextMenu from './ContextMenu';
 import CasePanel from './CasePanel';
 import FilePreviewModal from './FilePreviewModal';
@@ -17,6 +17,7 @@ interface FileIconProps {
     isRenaming: boolean;
     isDark: boolean;
     onSelect: (e: React.MouseEvent) => void;
+    onClick: (e: React.MouseEvent) => void;
     onDoubleClick: () => void;
     onDragStart: (e: React.MouseEvent, id: string) => void;
     onRenameSubmit: (id: string, newName: string) => void;
@@ -30,6 +31,7 @@ const FileIconComponent: React.FC<FileIconProps> = ({
     isRenaming,
     isDark,
     onSelect, 
+    onClick,
     onDoubleClick, 
     onDragStart,
     onRenameSubmit,
@@ -65,7 +67,20 @@ const FileIconComponent: React.FC<FileIconProps> = ({
     const selectedBg = isDark ? 'bg-blue-500/30 ring-blue-400/50' : 'bg-blue-500/20 ring-blue-400/50';
     const selectedText = 'bg-blue-600 text-white';
 
-    // Added transition-all duration-300 for smooth auto-arrange
+    // Determine Icon Color
+    let iconClass = '';
+    if (item.type === ItemType.NOTE) {
+        const colorKey = (item.color as keyof typeof NOTE_COLORS) || 'yellow';
+        iconClass = NOTE_COLORS[colorKey]?.icon || 'text-yellow-500';
+    } else if (item.type === ItemType.SMART_FOLDER) {
+        iconClass = 'text-purple-500';
+    } else if (item.type === ItemType.FOLDER) {
+        iconClass = 'text-blue-500';
+    } else {
+        iconClass = isDark ? 'text-gray-300' : 'text-gray-600';
+    }
+
+    // Standard Icon Rendering
     return (
         <div 
             id={`file-icon-${item.id}`} // Added ID for hit testing
@@ -80,6 +95,12 @@ const FileIconComponent: React.FC<FileIconProps> = ({
                     }
                 } 
             }}
+            onClick={(e) => {
+                if (!isRenaming) {
+                    e.stopPropagation();
+                    onClick(e);
+                }
+            }}
             onDoubleClick={(e) => { if (!isRenaming) { e.stopPropagation(); onDoubleClick(); } }}
         >
             <div className={`relative p-3 rounded-xl transition-all duration-200 
@@ -88,12 +109,7 @@ const FileIconComponent: React.FC<FileIconProps> = ({
             `}>
                 <Icon 
                     size={48} 
-                    className={`
-                        ${item.type === ItemType.SMART_FOLDER ? 'text-purple-500' : 
-                          item.type === ItemType.FOLDER ? 'text-blue-500' : 
-                          item.type === ItemType.NOTE ? 'text-yellow-500' : isDark ? 'text-gray-300' : 'text-gray-600'}
-                        drop-shadow-md filter
-                    `} 
+                    className={`${iconClass} drop-shadow-md filter`} 
                     strokeWidth={1.5}
                 />
                 
@@ -178,12 +194,15 @@ const FileSystem = () => {
     const [items, setItems] = useState<FileSystemItem[]>([]);
     const [currentPath, setCurrentPath] = useState<string | null>(null); // null = Desktop
     const [selection, setSelection] = useState<string[]>([]);
+    const [clipboard, setClipboard] = useState<{items: FileSystemItem[], action: 'copy'} | null>(null);
+    
     const [contextMenu, setContextMenu] = useState<{x: number, y: number} | null>(null);
     const [draggingId, setDraggingId] = useState<string | null>(null);
     const [dragTargetId, setDragTargetId] = useState<string | null>(null);
     // Stores offsets for ALL selected items during a drag
     const [dragOffsets, setDragOffsets] = useState<Record<string, Position>>({});
-    
+    const hasMovedRef = useRef(false);
+
     // Box Selection State
     const [isBoxSelecting, setIsBoxSelecting] = useState(false);
     const [selectionBox, setSelectionBox] = useState<{start: Position, current: Position} | null>(null);
@@ -238,7 +257,7 @@ const FileSystem = () => {
         const initialItems: FileSystemItem[] = [
              { id: '1', parentId: null, name: 'Project Alpha Case', type: ItemType.SMART_FOLDER, position: { x: 50, y: 50 }, createdAt: Date.now(), analysisStatus: AnalysisStatus.COMPLETED, analysisProgress: 100 },
              { id: '2', parentId: null, name: 'Personal Notes', type: ItemType.FOLDER, position: { x: 180, y: 50 }, createdAt: Date.now(), analysisStatus: AnalysisStatus.COMPLETED, analysisProgress: 100 },
-             { id: '3', parentId: '2', name: 'Meeting Minutes', type: ItemType.NOTE, position: { x: 50, y: 50 }, createdAt: Date.now(), analysisStatus: AnalysisStatus.COMPLETED, analysisProgress: 100, content: "Meeting Minutes - Oct 24\n\nAttendees: John, Jane, Bob\n\nTopics:\n- Case strategy\n- Evidence collection\n- Timeline review\n\nAction items:\n- Bob to review contracts\n- Jane to contact witness" },
+             { id: '3', parentId: '2', name: 'Meeting Minutes', type: ItemType.NOTE, position: { x: 50, y: 50 }, createdAt: Date.now(), analysisStatus: AnalysisStatus.COMPLETED, analysisProgress: 100, color: 'yellow', content: "Meeting Minutes - Oct 24\n\nAttendees: John, Jane, Bob\n\nTopics:\n- Case strategy\n- Evidence collection\n- Timeline review\n\nAction items:\n- Bob to review contracts\n- Jane to contact witness" },
              { id: examplesFolderId, parentId: null, name: 'Supported Formats', type: ItemType.FOLDER, position: { x: 310, y: 50 }, createdAt: Date.now(), analysisStatus: AnalysisStatus.COMPLETED, analysisProgress: 100 },
         ];
         
@@ -275,6 +294,161 @@ const FileSystem = () => {
         setCases(initialCases);
     }, []);
 
+
+    // --- Actions (Create, Paste, Copy) ---
+
+    const handleCreateItem = (type: ItemType) => {
+        if (!containerRef.current) return;
+        
+        let initialName = type === ItemType.NOTE ? t.newNote : type === ItemType.SMART_FOLDER ? t.newSmartCase : t.newFolder;
+        
+        const rect = containerRef.current.getBoundingClientRect();
+        let posX = 100;
+        let posY = 100;
+
+        if (contextMenu) {
+             posX = contextMenu.x - rect.left;
+             posY = contextMenu.y - rect.top;
+             posX = Math.max(10, Math.min(posX, rect.width - 120));
+             posY = Math.max(10, Math.min(posY, rect.height - 120));
+        } else {
+            // Random scatter for shortcuts
+            posX = 50 + Math.random() * 200;
+            posY = 50 + Math.random() * 200;
+        }
+
+        const newItem: FileSystemItem = {
+            id: Date.now().toString() + Math.random().toString().slice(2, 6),
+            parentId: currentPath,
+            name: initialName,
+            type: type,
+            position: { x: posX, y: posY },
+            createdAt: Date.now(),
+            analysisStatus: AnalysisStatus.COMPLETED,
+            analysisProgress: 100,
+            content: type === ItemType.NOTE ? '' : undefined,
+            color: type === ItemType.NOTE ? getRandomNoteColor() : undefined
+        };
+
+        if (type === ItemType.SMART_FOLDER) {
+            setCases(prev => ({
+                ...prev,
+                [newItem.id]: {
+                    id: newItem.id,
+                    scenario: t.caseInitialized,
+                    confidenceScore: 0,
+                    pendingQuestions: [],
+                    chatHistory: []
+                }
+            }));
+        }
+
+        setItems(prev => [...prev, newItem]);
+        setContextMenu(null);
+
+        // Auto Rename
+        setRenamingId(newItem.id);
+    };
+
+    const handleCopy = () => {
+        if (selection.length === 0) return;
+        const selectedItems = itemsRef.current.filter(i => selection.includes(i.id));
+        setClipboard({ items: selectedItems, action: 'copy' });
+    };
+
+    const handlePaste = () => {
+        if (!clipboard || !containerRef.current) return;
+        
+        const rect = containerRef.current.getBoundingClientRect();
+        const offsetX = 20;
+        const offsetY = 20;
+
+        const newItems: FileSystemItem[] = clipboard.items.map((item, index) => {
+             // Cascade position for pasted items
+             const newPos = {
+                 x: Math.min(rect.width - 100, Math.max(20, item.position.x + offsetX + (index * 10))),
+                 y: Math.min(rect.height - 100, Math.max(20, item.position.y + offsetY + (index * 10)))
+             };
+
+             const newId = Date.now().toString() + index;
+             
+             // If creating a Smart Folder copy, we need to init its Case Data too
+             if (item.type === ItemType.SMART_FOLDER && cases[item.id]) {
+                 setCases(prev => ({
+                     ...prev,
+                     [newId]: { ...cases[item.id], id: newId }
+                 }));
+             }
+
+             return {
+                 ...item,
+                 id: newId,
+                 parentId: currentPath, // Paste into current view
+                 position: newPos,
+                 name: item.parentId === currentPath ? `${item.name} Copy` : item.name,
+                 createdAt: Date.now()
+             };
+        });
+
+        setItems(prev => [...prev, ...newItems]);
+        setSelection(newItems.map(i => i.id)); // Select newly pasted items
+    };
+
+    const handleSelectAll = () => {
+        const idsInView = itemsRef.current
+            .filter(i => i.parentId === currentPath)
+            .map(i => i.id);
+        setSelection(idsInView);
+    };
+
+    // --- SHORTCUTS ---
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            const isMeta = e.metaKey || e.ctrlKey;
+            
+            // Ignore if typing in an input
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+                return;
+            }
+
+            if (isMeta) {
+                switch(e.key.toLowerCase()) {
+                    case 'a':
+                        e.preventDefault();
+                        handleSelectAll();
+                        break;
+                    case 'n':
+                        e.preventDefault();
+                        handleCreateItem(ItemType.FOLDER);
+                        break;
+                    case 'c':
+                        e.preventDefault();
+                        handleCopy();
+                        break;
+                    case 'p': // As requested for Paste
+                    case 'v': // Standard Paste
+                        e.preventDefault();
+                        handlePaste();
+                        break;
+                    case 'k':
+                        e.preventDefault();
+                        if (!smartContextId) { // Only allow if not already inside a smart case hierarchy
+                            handleCreateItem(ItemType.SMART_FOLDER);
+                        }
+                        break;
+                    case 't':
+                        e.preventDefault();
+                        handleCreateItem(ItemType.NOTE);
+                        break;
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [currentPath, selection, clipboard, smartContextId]); // Dependencies for shortcuts
+
+
     // --- Mouse/Drag Logic ---
 
     // Handler for background clicks to start Box Selection
@@ -307,6 +481,8 @@ const FileSystem = () => {
         const item = items.find(i => i.id === id);
         if (!item || !containerRef.current) return;
         
+        hasMovedRef.current = false; // Reset move tracking
+
         const rect = containerRef.current.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
         const mouseY = e.clientY - rect.top;
@@ -343,6 +519,7 @@ const FileSystem = () => {
 
         // 1. Handle Item Dragging
         if (draggingId) {
+            hasMovedRef.current = true; // Mark as moved
             setItems(prevItems => {
                  const newItems = [...prevItems];
                  
@@ -441,7 +618,7 @@ const FileSystem = () => {
                  }
                  return item;
              }));
-             setSelection([]);
+             // IMPORTANT: Do NOT clear selection here to allow multi-select drop persistence
         }
 
         // Finish Box Selection
@@ -523,57 +700,6 @@ const FileSystem = () => {
         }
     };
 
-    // --- Actions ---
-
-    const handleCreateItem = (type: ItemType) => {
-        if (!containerRef.current) return;
-        
-        let initialName = type === ItemType.NOTE ? t.newNote : type === ItemType.SMART_FOLDER ? t.newSmartCase : t.newFolder;
-        
-        const rect = containerRef.current.getBoundingClientRect();
-        let posX = 100;
-        let posY = 100;
-
-        if (contextMenu) {
-             posX = contextMenu.x - rect.left;
-             posY = contextMenu.y - rect.top;
-             // Ensure visible and not offscreen
-             posX = Math.max(10, Math.min(posX, rect.width - 120));
-             posY = Math.max(10, Math.min(posY, rect.height - 120));
-        }
-
-        const newItem: FileSystemItem = {
-            id: Date.now().toString(),
-            parentId: currentPath,
-            name: initialName,
-            type: type,
-            position: { x: posX, y: posY },
-            createdAt: Date.now(),
-            analysisStatus: AnalysisStatus.COMPLETED,
-            analysisProgress: 100,
-            content: type === ItemType.NOTE ? '' : undefined,
-        };
-
-        if (type === ItemType.SMART_FOLDER) {
-            setCases(prev => ({
-                ...prev,
-                [newItem.id]: {
-                    id: newItem.id,
-                    scenario: t.caseInitialized,
-                    confidenceScore: 0,
-                    pendingQuestions: [],
-                    chatHistory: []
-                }
-            }));
-        }
-
-        setItems(prev => [...prev, newItem]);
-        setContextMenu(null);
-
-        // Auto Rename
-        setRenamingId(newItem.id);
-    };
-
     const handleSort = (method: 'name' | 'date' | 'tidy') => {
         if (!containerRef.current) return;
         const rect = containerRef.current.getBoundingClientRect();
@@ -641,7 +767,7 @@ const FileSystem = () => {
         setContextMenu(null);
     }, [selection]);
 
-    // Keyboard shortcuts
+    // Keyboard shortcuts (DELETE)
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -685,8 +811,8 @@ const FileSystem = () => {
         } : i));
     };
 
-    const handleUpdateItemContent = (id: string, content: string) => {
-        setItems(prev => prev.map(item => item.id === id ? { ...item, content } : item));
+    const handleUpdateItem = (id: string, updates: Partial<FileSystemItem>) => {
+        setItems(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
     };
 
     const handleRenameSubmit = (id: string, newName: string) => {
@@ -783,6 +909,13 @@ const FileSystem = () => {
         return { left, top, width, height };
     };
 
+    const handleItemClick = (e: React.MouseEvent, item: FileSystemItem) => {
+        // If no drag occurred, and no modifiers, this click selects just this item
+        if (!hasMovedRef.current && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+            setSelection([item.id]);
+        }
+    };
+
     return (
         <div 
             className={`w-full h-full relative overflow-hidden flex flex-col transition-colors duration-300 ${isDark ? 'bg-black text-white selection:bg-blue-500/50' : 'bg-gray-100 text-gray-900 selection:bg-blue-200'}`}
@@ -792,6 +925,7 @@ const FileSystem = () => {
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
             ref={containerRef}
+            tabIndex={0} // Make container focusable for shortcuts if needed, though window listener handles it
         >
             {/* Context Menu */}
             {contextMenu && (
@@ -903,9 +1037,15 @@ const FileSystem = () => {
                                     if (e.metaKey || e.ctrlKey) {
                                         setSelection(prev => prev.includes(item.id) ? prev.filter(id => id !== item.id) : [...prev, item.id]);
                                     } else {
-                                        setSelection([item.id]);
+                                        // If clicking an item already selected, keep group (for potential drag)
+                                        // If not selected, select it (and clear others)
+                                        setSelection(prev => {
+                                            if (prev.includes(item.id)) return prev;
+                                            return [item.id];
+                                        });
                                     }
                                 }}
+                                onClick={(e) => handleItemClick(e, item)}
                                 onDoubleClick={() => handleDoubleClick(item)}
                                 onDragStart={handleDragStart}
                                 onRenameSubmit={handleRenameSubmit}
@@ -954,7 +1094,7 @@ const FileSystem = () => {
                     <FilePreviewModal
                         item={previewItem}
                         onClose={() => setPreviewItem(null)}
-                        onSave={handleUpdateItemContent}
+                        onSave={handleUpdateItem}
                         isDark={isDark}
                         t={t}
                     />

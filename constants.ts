@@ -1,6 +1,6 @@
 import { 
   FileText, Image, Video, Music, Archive, FileCode, Database, 
-  FileSpreadsheet, Mail, Folder, Briefcase, File 
+  FileSpreadsheet, Mail, Folder, Briefcase, File, StickyNote 
 } from 'lucide-react';
 
 export const SUPPORTED_EXTENSIONS = [
@@ -10,9 +10,23 @@ export const SUPPORTED_EXTENSIONS = [
   '7Z', 'DAT', 'OPT', 'LFP', 'XML', 'MDB', 'SQLITE'
 ];
 
+export const NOTE_COLORS = {
+  yellow: { light: 'bg-yellow-200 text-yellow-900', dark: 'bg-yellow-900/60 text-yellow-100 border-yellow-700', icon: 'text-yellow-500' },
+  blue:   { light: 'bg-blue-200 text-blue-900',     dark: 'bg-blue-900/60 text-blue-100 border-blue-700', icon: 'text-blue-500' },
+  green:  { light: 'bg-green-200 text-green-900',   dark: 'bg-green-900/60 text-green-100 border-green-700', icon: 'text-green-500' },
+  pink:   { light: 'bg-pink-200 text-pink-900',     dark: 'bg-pink-900/60 text-pink-100 border-pink-700', icon: 'text-pink-500' },
+  purple: { light: 'bg-purple-200 text-purple-900', dark: 'bg-purple-900/60 text-purple-100 border-purple-700', icon: 'text-purple-500' },
+};
+
+export const getRandomNoteColor = () => {
+  const keys = Object.keys(NOTE_COLORS);
+  return keys[Math.floor(Math.random() * keys.length)];
+};
+
 export const getIconForFileType = (filename: string, type: string) => {
   if (type === 'FOLDER') return Folder;
   if (type === 'SMART_FOLDER') return Briefcase;
+  if (type === 'NOTE') return StickyNote;
   
   const ext = filename.split('.').pop()?.toUpperCase() || '';
   

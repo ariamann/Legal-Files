@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, FileText, Image as ImageIcon, Music, Video as VideoIcon, FileCode, Layout, AlertCircle } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { X, Save, FileText, Image as ImageIcon, Music, Video as VideoIcon, FileCode, AlertCircle } from 'lucide-react';
 import { FileSystemItem, ItemType } from '../types';
+import { NOTE_COLORS } from '../constants';
 
 interface FilePreviewModalProps {
   item: FileSystemItem;
   onClose: () => void;
-  onSave: (id: string, content: string) => void;
+  onSave: (id: string, updates: Partial<FileSystemItem>) => void;
   isDark: boolean;
   t: any;
 }
@@ -17,20 +19,45 @@ const MOCK_PDF_URL = "https://raw.githubusercontent.com/mozilla/pdf.js/ba2edeae/
 
 const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClose, onSave, isDark, t }) => {
   const [content, setContent] = useState(item.content || '');
+  const [activeColor, setActiveColor] = useState(item.color || 'yellow');
 
   useEffect(() => {
     setContent(item.content || '');
+    setActiveColor(item.color || 'yellow');
   }, [item]);
 
   const handleSave = () => {
-    onSave(item.id, content);
+    onSave(item.id, { content: content });
     onClose();
   };
 
-  const bgClass = isDark ? "bg-gray-800 border-white/10" : "bg-white border-gray-200";
-  const headerClass = isDark ? "bg-gray-900/50 border-white/10" : "bg-gray-50 border-gray-200";
-  const bodyClass = isDark ? "bg-gray-900/30" : "bg-gray-50/50";
-  const textClass = isDark ? "text-white" : "text-gray-900";
+  const handleColorChange = (color: string) => {
+      setActiveColor(color);
+      onSave(item.id, { color: color });
+  };
+
+  // Determine styles based on item type
+  const isNote = item.type === ItemType.NOTE;
+  let containerClass = "";
+  let headerClass = "";
+  let bodyClass = "";
+  let textClass = "";
+
+  if (isNote) {
+      const colorKey = (activeColor as keyof typeof NOTE_COLORS) || 'yellow';
+      const noteStyles = isDark ? NOTE_COLORS[colorKey].dark : NOTE_COLORS[colorKey].light;
+      
+      // Apply note color to the entire container to match toolbar and body
+      containerClass = `${noteStyles} shadow-2xl`;
+      headerClass = `border-black/5`; 
+      bodyClass = ""; // Body is transparent to show container bg
+      textClass = "text-current"; // Inherit from noteStyles
+  } else {
+      containerClass = isDark ? "bg-gray-800 border-white/10" : "bg-white border-gray-200";
+      headerClass = isDark ? "bg-gray-900/50 border-white/10" : "bg-gray-50 border-gray-200";
+      bodyClass = isDark ? "bg-gray-900/30" : "bg-gray-50/50";
+      textClass = isDark ? "text-white" : "text-gray-900";
+  }
 
   // Helper to determine if content is a valid URL or Data URI
   const isUrlOrData = (str: string) => {
@@ -41,10 +68,11 @@ const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClose, onSa
   const getExt = (name: string) => name.split('.').pop()?.toLowerCase() || '';
 
   const renderContent = () => {
-    if (item.type === ItemType.NOTE) {
+    if (isNote) {
+      // For notes, we just need a transparent textarea since the container has the color
       return (
         <textarea
-          className={`w-full h-full p-8 rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-sm leading-relaxed ${isDark ? 'bg-gray-900/50 text-gray-200' : 'bg-white border border-gray-200 text-gray-800'}`}
+          className="w-full h-full p-12 text-lg resize-none focus:outline-none font-mono leading-relaxed bg-transparent border-none outline-none text-current placeholder-current/50"
           value={content}
           onChange={(e) => setContent(e.target.value)}
           placeholder="Start typing your note here..."
@@ -217,8 +245,20 @@ const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClose, onSa
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
-      <div className={`w-full max-w-6xl h-[90vh] rounded-xl shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/10 ${bgClass}`}>
+    <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.2 }}
+        className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 backdrop-blur-md p-4"
+    >
+      <motion.div 
+        initial={{ y: "100%", opacity: 0.5 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: "100%", opacity: 0 }}
+        transition={{ type: "spring", damping: 25, stiffness: 300 }}
+        className={`w-full max-w-6xl h-[90vh] rounded-xl flex flex-col overflow-hidden ring-1 ring-white/10 ${containerClass}`}
+      >
         {/* Header */}
         <div className={`h-14 border-b flex items-center justify-between px-6 shrink-0 ${headerClass}`}>
           <div className="flex items-center gap-3">
@@ -229,7 +269,20 @@ const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClose, onSa
             </div>
             {item.type === ItemType.NOTE && <span className={`text-[10px] uppercase tracking-wider font-bold border px-2 py-0.5 rounded ml-2 ${isDark ? 'bg-gray-900 border-white/10 text-gray-500' : 'bg-gray-100 border-gray-300 text-gray-600'}`}>{t.editable}</span>}
           </div>
-          <div className="flex items-center gap-2">
+          
+          <div className="flex items-center gap-4">
+            {item.type === ItemType.NOTE && (
+              <div className="flex gap-2 mr-2">
+                 {Object.keys(NOTE_COLORS).map(color => (
+                     <button
+                        key={color}
+                        onClick={() => handleColorChange(color)}
+                        className={`w-4 h-4 rounded-full border border-white/20 transition-transform hover:scale-125 ${activeColor === color ? 'ring-2 ring-white scale-110' : 'opacity-70'}`}
+                        style={{ backgroundColor: color === 'yellow' ? '#facc15' : color === 'blue' ? '#60a5fa' : color === 'green' ? '#4ade80' : color === 'pink' ? '#f472b6' : '#c084fc' }} 
+                     />
+                 ))}
+              </div>
+            )}
             {item.type === ItemType.NOTE && (
               <button 
                 onClick={handleSave}
@@ -248,8 +301,8 @@ const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClose, onSa
         <div className={`flex-1 overflow-hidden relative ${bodyClass}`}>
           {renderContent()}
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };
 

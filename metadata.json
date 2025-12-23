@@ -1,0 +1,7 @@
+{
+  "name": "LegalMind OS",
+  "description": "A high-fidelity, Mac-like file system interface for legal case analysis using Gemini AI. Features free-form drag-and-drop, smart evidence folders, automated case scenarios, and multimedia analysis.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

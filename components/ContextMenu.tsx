@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FolderPlus, Briefcase, StickyNote, Edit2, UploadCloud, Grid, Type, Calendar, LayoutGrid, Sun, Moon, Languages, ChevronRight } from 'lucide-react';
+import { FolderPlus, Briefcase, StickyNote, Edit2, UploadCloud, Grid, Type, Calendar, LayoutGrid, Sun, Moon, Languages, ChevronRight, Trash2 } from 'lucide-react';
 
 interface ContextMenuProps {
   x: number;
@@ -9,6 +9,7 @@ interface ContextMenuProps {
   onCreateSmartFolder: () => void;
   onCreateNote: () => void;
   onRename: () => void;
+  onDelete: () => void;
   onUpload: () => void;
   onSort: (method: 'name' | 'date' | 'tidy') => void;
   onToggleTheme: () => void;
@@ -20,7 +21,7 @@ interface ContextMenuProps {
 }
 
 const ContextMenu: React.FC<ContextMenuProps> = ({ 
-  x, y, onClose, onCreateFolder, onCreateSmartFolder, onCreateNote, onRename, onUpload, onSort, onToggleTheme, onToggleLang, canCreateSmartFolder, hasSelection, isDark, t
+  x, y, onClose, onCreateFolder, onCreateSmartFolder, onCreateNote, onRename, onDelete, onUpload, onSort, onToggleTheme, onToggleLang, canCreateSmartFolder, hasSelection, isDark, t
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [showSortMenu, setShowSortMenu] = useState(false);
@@ -43,6 +44,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
     <div 
       ref={menuRef}
       onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()} // Stop propagation to prevent canvas drag/box-select from firing
       className={`fixed z-50 w-64 backdrop-blur-xl border rounded-lg shadow-2xl py-1 text-sm overflow-visible animate-in fade-in zoom-in duration-100 ${bgClass}`}
       style={{ top: y, left: x }}
     >
@@ -115,6 +117,9 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
           <div className={`h-px my-1 mx-2 ${dividerClass}`} />
           <button onClick={onRename} className={`w-full text-left px-4 py-2 flex items-center gap-3 transition-colors ${hoverClass}`}>
             <Edit2 size={16} /> {t.rename}
+          </button>
+          <button onClick={onDelete} className={`w-full text-left px-4 py-2 flex items-center gap-3 transition-colors hover:bg-red-500/20 text-red-500`}>
+            <Trash2 size={16} /> {t.delete}
           </button>
         </>
       )}

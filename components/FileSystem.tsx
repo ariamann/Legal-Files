@@ -68,6 +68,7 @@ const FileIconComponent: React.FC<FileIconProps> = ({
     // Added transition-all duration-300 for smooth auto-arrange
     return (
         <div 
+            id={`file-icon-${item.id}`} // Added ID for hit testing
             className={`absolute flex flex-col items-center w-28 group cursor-pointer transition-all duration-300 ease-out ${isSelected ? 'scale-105 z-20' : 'z-0'}`}
             style={{ left: item.position.x, top: item.position.y, touchAction: 'none' }}
             onMouseDown={(e) => { 
@@ -180,7 +181,13 @@ const FileSystem = () => {
     const [contextMenu, setContextMenu] = useState<{x: number, y: number} | null>(null);
     const [draggingId, setDraggingId] = useState<string | null>(null);
     const [dragTargetId, setDragTargetId] = useState<string | null>(null);
-    const [dragOffset, setDragOffset] = useState<Position>({ x: 0, y: 0 });
+    // Stores offsets for ALL selected items during a drag
+    const [dragOffsets, setDragOffsets] = useState<Record<string, Position>>({});
+    
+    // Box Selection State
+    const [isBoxSelecting, setIsBoxSelecting] = useState(false);
+    const [selectionBox, setSelectionBox] = useState<{start: Position, current: Position} | null>(null);
+
     const [cases, setCases] = useState<Record<string, CaseData>>({});
     const [activeCaseId, setActiveCaseId] = useState<string | null>(null); // Controls panel visibility
     const [previewItem, setPreviewItem] = useState<FileSystemItem | null>(null);
@@ -270,6 +277,31 @@ const FileSystem = () => {
 
     // --- Mouse/Drag Logic ---
 
+    // Handler for background clicks to start Box Selection
+    const handleContainerMouseDown = (e: React.MouseEvent) => {
+        // Only trigger if clicking directly on the background or specific container elements
+        // (Event propagation from icons is stopped, so this should only fire on empty space)
+        if (e.button !== 0) return; // Only left click
+
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (!rect) return;
+
+        const startPos = { 
+            x: e.clientX - rect.left, 
+            y: e.clientY - rect.top 
+        };
+
+        setIsBoxSelecting(true);
+        setSelectionBox({ start: startPos, current: startPos });
+        setContextMenu(null);
+        setRenamingId(null);
+
+        // Clear selection unless modifier key is held
+        if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
+            setSelection([]);
+        }
+    };
+
     const handleDragStart = (e: React.MouseEvent, id: string) => {
         if (renamingId) return;
         const item = items.find(i => i.id === id);
@@ -279,54 +311,132 @@ const FileSystem = () => {
         const mouseX = e.clientX - rect.left;
         const mouseY = e.clientY - rect.top;
         
-        setDragOffset({
-            x: mouseX - item.position.x,
-            y: mouseY - item.position.y
-        });
-        setDraggingId(id);
+        // Determine what is being dragged
+        let itemsToDragIds = selection.includes(id) ? selection : [id];
         
+        // Update selection if the dragged item wasn't previously selected
         if (!selection.includes(id)) {
             setSelection([id]);
         }
+
+        const newOffsets: Record<string, Position> = {};
+        
+        itemsToDragIds.forEach(draggedId => {
+            const itemObj = items.find(i => i.id === draggedId);
+            if (itemObj) {
+                newOffsets[draggedId] = {
+                    x: mouseX - itemObj.position.x,
+                    y: mouseY - itemObj.position.y
+                };
+            }
+        });
+
+        setDragOffsets(newOffsets);
+        setDraggingId(id); // Main drag leader
     };
 
     const handleMouseMove = useCallback((e: MouseEvent) => {
-        if (!draggingId || !containerRef.current) return;
-        
+        if (!containerRef.current) return;
         const rect = containerRef.current.getBoundingClientRect();
-        const x = e.clientX - rect.left - dragOffset.x;
-        const y = e.clientY - rect.top - dragOffset.y;
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
 
-        const newX = Math.max(0, Math.min(x, rect.width - 80));
-        const newY = Math.max(0, Math.min(y, rect.height - 80));
+        // 1. Handle Item Dragging
+        if (draggingId) {
+            setItems(prevItems => {
+                 const newItems = [...prevItems];
+                 
+                 Object.keys(dragOffsets).forEach(id => {
+                     const offset = dragOffsets[id];
+                     const x = mouseX - offset.x;
+                     const y = mouseY - offset.y;
+                     
+                     const newX = Math.max(0, Math.min(x, rect.width - 80));
+                     const newY = Math.max(0, Math.min(y, rect.height - 80));
 
-        setItems(prev => prev.map(item => 
-            item.id === draggingId ? { ...item, position: { x: newX, y: newY } } : item
-        ));
+                     const itemIndex = newItems.findIndex(i => i.id === id);
+                     if (itemIndex > -1) {
+                         newItems[itemIndex] = { ...newItems[itemIndex], position: { x: newX, y: newY } };
+                     }
+                 });
+                 return newItems;
+            });
 
-        const currentItems = itemsRef.current.filter(i => i.parentId === currentPath);
-        let foundTarget = null;
-        
-        for (const item of currentItems) {
-            if (item.id === draggingId) continue;
-            if (item.type !== ItemType.FOLDER && item.type !== ItemType.SMART_FOLDER) continue;
-
-            const dx = Math.abs(item.position.x - newX);
-            const dy = Math.abs(item.position.y - newY);
-            
-            if (dx < 50 && dy < 50) {
-                foundTarget = item.id;
-                break;
+            // Hit testing for folders
+            const primaryItem = itemsRef.current.find(i => i.id === draggingId);
+            if (primaryItem) {
+                 const currentItemsInView = itemsRef.current.filter(i => i.parentId === currentPath);
+                 let foundTarget = null;
+                 
+                 for (const item of currentItemsInView) {
+                     if (dragOffsets[item.id]) continue; 
+                     if (item.type !== ItemType.FOLDER && item.type !== ItemType.SMART_FOLDER) continue;
+         
+                     const dx = Math.abs(item.position.x - primaryItem.position.x);
+                     const dy = Math.abs(item.position.y - primaryItem.position.y);
+                     
+                     if (dx < 50 && dy < 50) {
+                         foundTarget = item.id;
+                         break;
+                     }
+                 }
+                 setDragTargetId(foundTarget);
             }
-        }
-        setDragTargetId(foundTarget);
+        } 
+        // 2. Handle Box Selection
+        else if (isBoxSelecting && selectionBox) {
+            setSelectionBox(prev => prev ? { ...prev, current: { x: mouseX, y: mouseY } } : null);
 
-    }, [draggingId, dragOffset, currentPath]);
+            // Calculate Box Geometry
+            const startX = selectionBox.start.x;
+            const startY = selectionBox.start.y;
+            const curX = mouseX;
+            const curY = mouseY;
+
+            const boxLeft = Math.min(startX, curX);
+            const boxTop = Math.min(startY, curY);
+            const boxRight = Math.max(startX, curX);
+            const boxBottom = Math.max(startY, curY);
+
+            // Check intersections
+            const currentItemsInView = itemsRef.current.filter(i => i.parentId === currentPath);
+            const newSelection: string[] = [];
+
+            // Assumed item dimensions (approximate)
+            const ITEM_W = 112; 
+            const ITEM_H = 112; 
+
+            currentItemsInView.forEach(item => {
+                const itemLeft = item.position.x;
+                const itemTop = item.position.y;
+                const itemRight = itemLeft + ITEM_W;
+                const itemBottom = itemTop + ITEM_H;
+
+                // AABB Intersection check
+                const isOverlapping = (
+                    boxLeft < itemRight &&
+                    boxRight > itemLeft &&
+                    boxTop < itemBottom &&
+                    boxBottom > itemTop
+                );
+
+                if (isOverlapping) {
+                    newSelection.push(item.id);
+                }
+            });
+
+            // If we want to support additive selection with modifiers, we'd merge here.
+            // For now, simpler implementation: Box select replaces selection (standard finder behavior unless modifier held at start)
+            setSelection(newSelection);
+        }
+
+    }, [draggingId, dragOffsets, currentPath, isBoxSelecting, selectionBox]);
 
     const handleMouseUp = useCallback(() => {
+        // Finish Dragging
         if (draggingId && dragTargetId) {
              setItems(prev => prev.map(item => {
-                 if (item.id === draggingId) {
+                 if (dragOffsets[item.id]) {
                      return { ...item, parentId: dragTargetId, position: { x: 50, y: 50 } };
                  }
                  return item;
@@ -334,12 +444,19 @@ const FileSystem = () => {
              setSelection([]);
         }
 
+        // Finish Box Selection
+        if (isBoxSelecting) {
+            setIsBoxSelecting(false);
+            setSelectionBox(null);
+        }
+
         setDraggingId(null);
         setDragTargetId(null);
-    }, [draggingId, dragTargetId]);
+        setDragOffsets({});
+    }, [draggingId, dragTargetId, dragOffsets, isBoxSelecting]);
 
     useEffect(() => {
-        if (draggingId) {
+        if (draggingId || isBoxSelecting) {
             window.addEventListener('mousemove', handleMouseMove);
             window.addEventListener('mouseup', handleMouseUp);
         } else {
@@ -350,7 +467,7 @@ const FileSystem = () => {
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [draggingId, handleMouseMove, handleMouseUp]);
+    }, [draggingId, isBoxSelecting, handleMouseMove, handleMouseUp]);
 
 
     // --- File Processing ---
@@ -413,12 +530,24 @@ const FileSystem = () => {
         
         let initialName = type === ItemType.NOTE ? t.newNote : type === ItemType.SMART_FOLDER ? t.newSmartCase : t.newFolder;
         
+        const rect = containerRef.current.getBoundingClientRect();
+        let posX = 100;
+        let posY = 100;
+
+        if (contextMenu) {
+             posX = contextMenu.x - rect.left;
+             posY = contextMenu.y - rect.top;
+             // Ensure visible and not offscreen
+             posX = Math.max(10, Math.min(posX, rect.width - 120));
+             posY = Math.max(10, Math.min(posY, rect.height - 120));
+        }
+
         const newItem: FileSystemItem = {
             id: Date.now().toString(),
             parentId: currentPath,
             name: initialName,
             type: type,
-            position: { x: contextMenu ? contextMenu.x - 250 : 100, y: contextMenu ? contextMenu.y - 100 : 100 },
+            position: { x: posX, y: posY },
             createdAt: Date.now(),
             analysisStatus: AnalysisStatus.COMPLETED,
             analysisProgress: 100,
@@ -489,6 +618,42 @@ const FileSystem = () => {
 
         setItems([...otherItems, ...reorderedItems]);
     };
+
+    const handleDelete = useCallback(() => {
+        if (selection.length === 0) return;
+
+        // Find all IDs to delete (including recursive children)
+        const idsToDelete = new Set(selection);
+        let sizeBefore = 0;
+        
+        // Iteratively find children until no new children are added
+        do {
+            sizeBefore = idsToDelete.size;
+            itemsRef.current.forEach(item => {
+                if (item.parentId && idsToDelete.has(item.parentId) && !idsToDelete.has(item.id)) {
+                    idsToDelete.add(item.id);
+                }
+            });
+        } while (idsToDelete.size > sizeBefore);
+
+        setItems(prev => prev.filter(i => !idsToDelete.has(i.id)));
+        setSelection([]);
+        setContextMenu(null);
+    }, [selection]);
+
+    // Keyboard shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (!renamingId && !previewItem) { // Don't delete if renaming or previewing
+                    handleDelete();
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [handleDelete, renamingId, previewItem]);
 
     const startAnalysis = async (file: FileSystemItem) => {
         setItems(prev => prev.map(i => i.id === file.id ? { ...i, analysisStatus: AnalysisStatus.ANALYZING } : i));
@@ -602,11 +767,27 @@ const FileSystem = () => {
         }
     };
 
+    // Calculate selection box style
+    const getSelectionBoxStyle = () => {
+        if (!selectionBox) return {};
+        const startX = selectionBox.start.x;
+        const startY = selectionBox.start.y;
+        const curX = selectionBox.current.x;
+        const curY = selectionBox.current.y;
+
+        const left = Math.min(startX, curX);
+        const top = Math.min(startY, curY);
+        const width = Math.abs(startX - curX);
+        const height = Math.abs(startY - curY);
+
+        return { left, top, width, height };
+    };
+
     return (
         <div 
             className={`w-full h-full relative overflow-hidden flex flex-col transition-colors duration-300 ${isDark ? 'bg-black text-white selection:bg-blue-500/50' : 'bg-gray-100 text-gray-900 selection:bg-blue-200'}`}
             onContextMenu={handleContextMenu}
-            onClick={() => { setContextMenu(null); setSelection([]); setRenamingId(null); }}
+            onMouseDown={handleContainerMouseDown} // Attach box select trigger
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
@@ -625,12 +806,13 @@ const FileSystem = () => {
                         if (selection.length === 1) setRenamingId(selection[0]);
                         setContextMenu(null);
                     }}
+                    onDelete={handleDelete}
                     onUpload={() => fileInputRef.current?.click()}
                     onSort={handleSort}
                     onToggleTheme={() => setIsDark(prev => !prev)}
                     onToggleLang={() => setLang(l => l === 'EN' ? 'CN' : 'EN')}
                     canCreateSmartFolder={!smartContextId}
-                    hasSelection={selection.length === 1}
+                    hasSelection={selection.length > 0}
                     isDark={isDark}
                     t={t}
                 />
@@ -664,8 +846,6 @@ const FileSystem = () => {
                         ) : t.desktop}
                     </span>
                 </div>
-                
-                {/* Right side buttons removed as requested */}
             </div>
 
             {/* Main Canvas Area */}
@@ -676,6 +856,14 @@ const FileSystem = () => {
                         : 'radial-gradient(circle at 50% 50%, #f3f4f6 0%, #e5e7eb 100%)' 
                  }}>
                  
+                 {/* Selection Box Render */}
+                 {isBoxSelecting && selectionBox && (
+                    <div 
+                        className="absolute bg-blue-500/20 border border-blue-500/50 z-50 pointer-events-none"
+                        style={getSelectionBoxStyle()}
+                    />
+                 )}
+
                  {/* Drag Overlay */}
                  <AnimatePresence>
                      {isDragOver && (
